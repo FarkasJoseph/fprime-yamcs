@@ -71,9 +71,9 @@ public class FprimePacketPreprocessor extends AbstractPacketPreprocessor {
     // Packetized-telemetry (Svc.TlmPacketizer, APID 4) packet ids treated the same way.
     private final Set<Integer> doNotArchivePacketIds = new HashSet<>();
 
-    // F Prime time bases whose seconds count from the Unix epoch (TB_NONE, TB_WORKSTATION_TIME).
+    // F Prime time bases whose seconds count from the Unix epoch (TB_WORKSTATION_TIME).
     // Packets with any other time base get the reception time as generation time.
-    private final Set<Integer> unixTimeBases = new HashSet<>(Set.of(0, 2));
+    private final Set<Integer> unixTimeBases = new HashSet<>(Set.of(2));
 
     // Constructor used when this preprocessor is used without YAML configuration
     public FprimePacketPreprocessor(String yamcsInstance) {

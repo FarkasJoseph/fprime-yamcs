@@ -20,6 +20,7 @@ import org.yamcs.utils.TimeEncoding;
 public class FprimePacketPreprocessorTest {
 
     // FPrimeTime seen live from the BigData deployment: TB_WORKSTATION_TIME, 2026-09-30T23:05:16.668064Z
+    private static final int TB_NONE = 0;
     private static final int TB_WORKSTATION_TIME = 2;
     private static final int TB_SC_TIME = 3;
     private static final long LIVE_SECONDS = 1790809516L;
@@ -52,9 +53,17 @@ public class FprimePacketPreprocessorTest {
     }
 
     @Test
-    public void timeBaseNoneIsUnix() {
-        TmPacket packet = process(event(0, LIVE_SECONDS, LIVE_USECONDS));
-        assertEquals(LIVE_TIME, TimeEncoding.toString(packet.getGenerationTime()));
+    public void timeBaseNoneIsUnixOnlyWhenConfigured() {
+        TmPacket packet = process(event(TB_NONE, LIVE_SECONDS, LIVE_USECONDS));
+        assertEquals(receptionTime, packet.getGenerationTime());
+        assertTrue(isLocalGenTime(packet));
+        assertTrue(warned("UNKNOWN_TIME_BASE"));
+
+        FprimePacketPreprocessor preprocessor = new FprimePacketPreprocessor("test",
+                YConfiguration.wrap(Map.of("unixTimeBases", List.of(TB_NONE, TB_WORKSTATION_TIME))));
+        TmPacket none = preprocessor.process(event(TB_NONE, LIVE_SECONDS, LIVE_USECONDS));
+        assertEquals(LIVE_TIME, TimeEncoding.toString(none.getGenerationTime()));
+        assertFalse(isLocalGenTime(none));
     }
 
     @Test
