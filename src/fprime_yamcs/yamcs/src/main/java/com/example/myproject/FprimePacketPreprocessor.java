@@ -71,6 +71,10 @@ public class FprimePacketPreprocessor extends AbstractPacketPreprocessor {
     // Packetized-telemetry (Svc.TlmPacketizer, APID 4) packet ids treated the same way.
     private final Set<Integer> doNotArchivePacketIds = new HashSet<>();
 
+    // F Prime time bases whose seconds count from the Unix epoch (TB_NONE, TB_WORKSTATION_TIME).
+    // Packets with any other time base get the reception time as generation time.
+    private final Set<Integer> unixTimeBases = new HashSet<>(Set.of(0, 2));
+
     // Constructor used when this preprocessor is used without YAML configuration
     public FprimePacketPreprocessor(String yamcsInstance) {
         this(yamcsInstance, YConfiguration.emptyConfig());
@@ -88,6 +92,12 @@ public class FprimePacketPreprocessor extends AbstractPacketPreprocessor {
         if (config.containsKey("doNotArchivePacketIds")) {
             for (Object id : config.getList("doNotArchivePacketIds")) {
                 doNotArchivePacketIds.add(((Number) id).intValue());
+            }
+        }
+        if (config.containsKey("unixTimeBases")) {
+            unixTimeBases.clear();
+            for (Object base : config.getList("unixTimeBases")) {
+                unixTimeBases.add(((Number) base).intValue());
             }
         }
     }
@@ -117,7 +127,7 @@ public class FprimePacketPreprocessor extends AbstractPacketPreprocessor {
                     "Sequence count jump for APID: " + apid + " old seq: " + oldseq + " newseq: " + seq);
         }
 
-        int time_tag_offset = 0;
+        int time_tag_offset = -1; // stays -1 for packets without an F Prime time tag
         // Find time tags depending on APID
         if (apid == APID_EVENT) {
             time_tag_offset = EVENT_TIME_TAG_OFFSET;
@@ -138,16 +148,7 @@ public class FprimePacketPreprocessor extends AbstractPacketPreprocessor {
                 }
             }
         }
-        // Weird stuff with leap seconds, see
-        // https://docs.yamcs.org/yamcs-server-manual/general/time/
-        int leapSecondsOffset = 38;
-        int timeSec = ByteBuffer.wrap(bytes).getInt(time_tag_offset) + leapSecondsOffset;
-        int timeUsec = ByteBuffer.wrap(bytes).getInt(time_tag_offset + 4); // sec is 4 bytes width
-        long packetGenerationTime = (timeSec * 1000L) + (timeUsec / 1000L);
-
-        // Our custom packets don't include a secundary header with time information.
-        // Use Yamcs-local time instead.
-        packet.setGenerationTime(packetGenerationTime);
+        setGenerationTime(packet, bytes, time_tag_offset);
 
         // Use the full 32-bits, so that both APID and the count are included.
         // Yamcs uses this attribute to uniquely identify the packet (together with the
@@ -155,6 +156,44 @@ public class FprimePacketPreprocessor extends AbstractPacketPreprocessor {
         packet.setSequenceCount(apidseqcount);
 
         return packet;
+    }
+
+    // Reads the F Prime time tag (base, context, seconds, useconds) whose seconds field is
+    // at timeTagOffset. Packets without a usable Unix time tag keep their reception time.
+    private void setGenerationTime(TmPacket packet, byte[] bytes, int timeTagOffset) {
+        if (timeTagOffset < 0) {
+            setLocalGenerationTime(packet);
+            return;
+        }
+        if (bytes.length < timeTagOffset + 8) {
+            eventProducer.sendWarning("SHORT_PACKET",
+                    "Packet too short for its F Prime time tag, length: " + bytes.length);
+            setLocalGenerationTime(packet);
+            return;
+        }
+        ByteBuffer buf = ByteBuffer.wrap(bytes);
+        int timeBase = buf.getShort(timeTagOffset - FwTimeContextStoreType_SIZE - FwTimeBaseStoreType_SIZE)
+                & 0xFFFF;
+        long timeSec = buf.getInt(timeTagOffset) & 0xFFFFFFFFL;
+        long timeUsec = buf.getInt(timeTagOffset + 4) & 0xFFFFFFFFL;
+        if (!unixTimeBases.contains(timeBase)) {
+            eventProducer.sendWarning("UNKNOWN_TIME_BASE",
+                    "F Prime time base " + timeBase + " is not in unixTimeBases; using reception time");
+            setLocalGenerationTime(packet);
+        } else if (timeUsec >= 1_000_000) {
+            eventProducer.sendWarning("INVALID_TIME",
+                    "F Prime time has useconds " + timeUsec + " >= 1000000; using reception time");
+            setLocalGenerationTime(packet);
+        } else {
+            // Yamcs instants count leap seconds, Unix time does not; see
+            // https://docs.yamcs.org/yamcs-server-manual/general/time/
+            packet.setGenerationTime(TimeEncoding.fromUnixMillisec(timeSec * 1000 + timeUsec / 1000));
+        }
+    }
+
+    private static void setLocalGenerationTime(TmPacket packet) {
+        packet.setGenerationTime(packet.getReceptionTime());
+        packet.setLocalGenTimeFlag();
     }
 
 }
