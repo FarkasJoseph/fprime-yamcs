@@ -138,16 +138,13 @@ public class FprimePacketPreprocessor extends AbstractPacketPreprocessor {
                 }
             }
         }
-        // Weird stuff with leap seconds, see
+        // The time tag is Unix time: a U32 of seconds, then microseconds. We read the seconds
+        // as unsigned so dates after 2038 don't go negative, and let TimeEncoding add the leap
+        // seconds that Yamcs time counts and Unix time skips; see
         // https://docs.yamcs.org/yamcs-server-manual/general/time/
-        int leapSecondsOffset = 38;
-        int timeSec = ByteBuffer.wrap(bytes).getInt(time_tag_offset) + leapSecondsOffset;
+        long timeSec = Integer.toUnsignedLong(ByteBuffer.wrap(bytes).getInt(time_tag_offset));
         int timeUsec = ByteBuffer.wrap(bytes).getInt(time_tag_offset + 4); // sec is 4 bytes width
-        long packetGenerationTime = (timeSec * 1000L) + (timeUsec / 1000L);
-
-        // Our custom packets don't include a secundary header with time information.
-        // Use Yamcs-local time instead.
-        packet.setGenerationTime(packetGenerationTime);
+        packet.setGenerationTime(TimeEncoding.fromUnixTime(timeSec, timeUsec));
 
         // Use the full 32-bits, so that both APID and the count are included.
         // Yamcs uses this attribute to uniquely identify the packet (together with the
