@@ -36,11 +36,13 @@ fprime-yamcs
 
 Selecting `--communication-selection udp` expects the deployment to exchange UDP datagrams with the YAMCS links directly; no bridge is started.
 
+For a deployment that uses F Prime framing (`Svc.FprimeFramer`/`Svc.FprimeDeframer`) instead of CCSDS frames, pass `--framing-selection fprime` or set `framing-selection: fprime` in `fprime-gds.yml`, the same option `fprime-gds` takes. The bridge then turns each F Prime frame into a Space Packet for YAMCS and puts each command in an F Prime frame. This needs the bridge, so it cannot be combined with `--communication-selection udp`. It also cannot be combined with `--yamcs-sdls-key-file`, because SDLS encrypts CCSDS frames.
+
 > [!NOTE]
 > TCP port 50000 (`--tcp-fast-port`) and the YAMCS UDP ports (`--udp-downlink-port` 50000, `--udp-uplink-port` 50001, `--udp-tm-inject-port` 50002 by default) do not conflict: TCP and UDP port numbers are independent. The legacy `ip` adapter binds both TCP and UDP on `--ip-port`, so it must differ from the YAMCS UDP ports (e.g. `--communication-selection ip --ip-port 50050`); the launcher refuses colliding ports. The deployment binary (`--app`) is launched with `-a`/`-p` matching the serving adapter (`--tcp-fast-address`/`--tcp-fast-port` or `--ip-address`/`--ip-port`).
 
 > [!IMPORTANT]
-> The bridge defaults require the `tcp-fast-server` and `tm-frame-aggregator` plugins of `fprime-gds` 4.4.0 or later. Framing plugins other than the CCSDS TM/TC path are not supported by the launcher.
+> The bridge defaults require the `tcp-fast-server` and `tm-frame-aggregator` plugins of `fprime-gds` 4.4.0 or later. The launcher's `--framing-selection` accepts only `space-packet-space-data-link` (the default, CCSDS TM/TC frames) and `fprime`.
 
 ## fprime-yamcs-events: Event Processor
 
@@ -70,7 +72,7 @@ Telemetry flow is detected from the selected processor's TM statistics stream (r
 
 ## Communication Bridge: fprime-comm-bridge
 
-Non-`udp` communication adapters are bridged to the YAMCS UDP links by [`fprime-comm-bridge`](https://github.com/nasa/fprime-gds), which ships with `fprime-gds`. `fprime-yamcs` starts it automatically whenever a communication adapter other than `udp` is selected (`udp-fast` is the bridge's own YAMCS-side adapter and is rejected as a flight-side selection), forwarding the adapter options, the dictionary, and the configured YAMCS UDP ports and selecting `tm-frame-aggregator` framing; run it directly when operating YAMCS without the full launcher.
+Non-`udp` communication adapters are bridged to the YAMCS UDP links by [`fprime-comm-bridge`](https://github.com/nasa/fprime-gds), which ships with `fprime-gds`. `fprime-yamcs` starts it automatically whenever a communication adapter other than `udp` is selected (`udp-fast` is the bridge's own YAMCS-side adapter and is rejected as a flight-side selection), forwarding the adapter options, the dictionary, and the configured YAMCS UDP ports and selecting the framing plugin for `--framing-selection` (`tm-frame-aggregator` for CCSDS frames, `fprime-space-packet` for F Prime frames); run it directly when operating YAMCS without the full launcher.
 
 - The endpoint side is reached through an F Prime GDS **communication adapter plugin** (`--communication-selection`: `tcp-fast-server` by default on `--tcp-fast-port` 50000, or `tcp-fast-client`, `uart`, `ip`, or any installed adapter plugin).
 - The YAMCS side is the `udp-fast` communication adapter: it pushes deframed packets as UDP datagrams to the telemetry intake (`--udp-fast-address`/`--udp-fast-send-port`, default `127.0.0.1:50000`) and receives command datagrams on a local UDP port (`--udp-fast-bind-address`/`--udp-fast-recv-port`, default `127.0.0.1:50001`). Command datagrams are only accepted from the peer address, loopback (`127.0.0.1`), and any hosts supplied via `--udp-fast-allowed-source`.
