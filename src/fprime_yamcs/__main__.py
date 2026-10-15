@@ -617,14 +617,14 @@ def construct_temporary_configuration(config_directory: Path, instances: List[st
     with instance_path.open() as f:
         instance_config = yaml.safe_load(f)
     configure_fprime_instance(instance_config, dictionary, uplink_port, downlink_port, tm_inject_port,
-                              realtime_only_channels, sdls_key_file, sdls_spi)
+                              realtime_only_channels, sdls_key_file, sdls_spi, fprime_framing)
     with instance_path.open("w") as f:
         yaml.safe_dump(instance_config, f)
 
     return  yamcs_working_config_dir, fprime_instance
 
 
-def configure_fprime_instance(instance_config: dict, dictionary: Path, uplink_port: int, downlink_port: int, tm_inject_port: int, realtime_only_channels: List[str], sdls_key_file: Optional[Path] = None, sdls_spi: int = 1):
+def configure_fprime_instance(instance_config: dict, dictionary: Path, uplink_port: int, downlink_port: int, tm_inject_port: int, realtime_only_channels: List[str], sdls_key_file: Optional[Path] = None, sdls_spi: int = 1, fprime_framing: bool = False):
     """ Set the UDP ports, dictionary constants, realtime-only channels and SDLS settings of an F Prime instance
 
     Args:
@@ -636,6 +636,7 @@ def configure_fprime_instance(instance_config: dict, dictionary: Path, uplink_po
         realtime_only_channels: Telemetry channel name patterns to keep realtime-only (not archived)
         sdls_key_file: 32-byte AES-256 key file enabling SDLS on the TM/TC frame links, or None to leave frames clear-text
         sdls_spi: SDLS security parameter index to use when sdls_key_file is set
+        fprime_framing: True when the deployment uses F Prime framing, which the bridge converts to Space Packets
     """
     frame_size = get_dictionary_constant(dictionary, "ComCfg.TmFrameFixedSize")
     spacecraft_id = get_dictionary_constant(dictionary, "ComCfg.SpacecraftId")

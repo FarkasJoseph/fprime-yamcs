@@ -127,8 +127,8 @@ fprime-yamcs --yamcs-instance ref path/to/RefTopologyDictionary.json 50720
 
 The new instance copies the first F Prime instance, the one `--dictionary` configures, but gets its own XTCE file, frame
 size and spacecraft ID from `DICTIONARY`, and its own file bucket, `fprimeFilesIn-NAME`. YAMCS takes its TM on UDP
-`PORT`, sends its TC to `PORT+1` and takes split telemetry on `PORT+2`. SDLS and `--yamcs-realtime-only-channels` still
-apply only to the first instance.
+`PORT`, sends its TC to `PORT+1` and takes split telemetry on `PORT+2`. SDLS, `--framing-selection` and
+`--yamcs-realtime-only-channels` still apply only to the first instance.
 
 The launcher does not start these deployments. Start each one yourself, with an `fprime-comm-bridge` in front if it does
 not talk UDP (`--udp-fast-send-port PORT --udp-fast-recv-port PORT+1`).
