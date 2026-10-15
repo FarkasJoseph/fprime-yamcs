@@ -167,18 +167,19 @@ def check_communication_selection(communication_selection: str):
 
 
 def check_framing_selection(parsed_args):
-    """ Reject options that F Prime framing cannot work with
+    """ Fall back to CCSDS framing for a framing the YAMCS links can't take, and reject F Prime framing without a bridge
 
     Args:
-        parsed_args: parsed argument namespace
+        parsed_args: parsed argument namespace, whose framing_selection may be reset to the default
     """
-    if parsed_args.framing_selection != "fprime":
-        return
-    if parsed_args.communication_selection == "udp":
+    if parsed_args.framing_selection not in BRIDGE_FRAMINGS:
+        # fprime-gds.yml is shared with fprime-gds, which offers framings YAMCS can't use, so we ignore them
+        print(f"[WARNING] Ignoring framing selection '{parsed_args.framing_selection}', which fprime-yamcs does not "
+              "support. Using space-packet-space-data-link.")
+        parsed_args.framing_selection = "space-packet-space-data-link"
+    if parsed_args.framing_selection == "fprime" and parsed_args.communication_selection == "udp":
         raise Exception("[ERROR] F Prime framing needs fprime-comm-bridge to convert frames, and a 'udp' deployment "
                         "talks to YAMCS directly. Select a bridged adapter (e.g. tcp-fast-server, uart) instead.")
-    if parsed_args.yamcs_sdls_key_file is not None:
-        raise Exception("[ERROR] SDLS encrypts CCSDS frames, so it cannot be used with F Prime framing.")
 
 
 def comm_bridge_arguments(parsed_args) -> List[str]:
@@ -290,7 +291,6 @@ class YamcsParser(ParserBase):
                         "(fprime_yamcs.plugin_jars entry points) are added automatically.",
             },
             ("--framing-selection",): {
-                "choices": list(BRIDGE_FRAMINGS),
                 "default": "space-packet-space-data-link",
                 "help": "Framing the deployment uses: CCSDS TM/TC frames (space-packet-space-data-link) or F Prime "
                         "frames (fprime). [default: %(default)s]",

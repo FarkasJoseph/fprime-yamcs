@@ -36,13 +36,13 @@ fprime-yamcs
 
 Selecting `--communication-selection udp` expects the deployment to exchange UDP datagrams with the YAMCS links directly; no bridge is started.
 
-For a deployment that uses F Prime framing (`Svc.FprimeFramer`/`Svc.FprimeDeframer`) instead of CCSDS frames, pass `--framing-selection fprime` or set `framing-selection: fprime` in `fprime-gds.yml`, the same option `fprime-gds` takes. The bridge then turns each F Prime frame into a Space Packet for YAMCS and puts each command in an F Prime frame. This needs the bridge, so it cannot be combined with `--communication-selection udp`. It also cannot be combined with `--yamcs-sdls-key-file`, because SDLS encrypts CCSDS frames.
+For a deployment that uses F Prime framing (`Svc.FprimeFramer`/`Svc.FprimeDeframer`) instead of CCSDS frames, pass `--framing-selection fprime` or set `framing-selection: fprime` in `fprime-gds.yml`, the same option `fprime-gds` takes. The bridge then turns each F Prime frame into a Space Packet for YAMCS and puts each command in an F Prime frame. This needs the bridge, so it cannot be combined with `--communication-selection udp`.
 
 > [!NOTE]
 > TCP port 50000 (`--tcp-fast-port`) and the YAMCS UDP ports (`--udp-downlink-port` 50000, `--udp-uplink-port` 50001, `--udp-tm-inject-port` 50002 by default) do not conflict: TCP and UDP port numbers are independent. The legacy `ip` adapter binds both TCP and UDP on `--ip-port`, so it must differ from the YAMCS UDP ports (e.g. `--communication-selection ip --ip-port 50050`); the launcher refuses colliding ports. The deployment binary (`--app`) is launched with `-a`/`-p` matching the serving adapter (`--tcp-fast-address`/`--tcp-fast-port` or `--ip-address`/`--ip-port`).
 
 > [!IMPORTANT]
-> The bridge defaults require the `tcp-fast-server` and `tm-frame-aggregator` plugins of `fprime-gds` 4.4.0 or later. The launcher's `--framing-selection` accepts only `space-packet-space-data-link` (the default, CCSDS TM/TC frames) and `fprime`.
+> The bridge defaults require the `tcp-fast-server` and `tm-frame-aggregator` plugins of `fprime-gds` 4.4.0 or later. The launcher's `--framing-selection` supports only `space-packet-space-data-link` (the default, CCSDS TM/TC frames) and `fprime`, and ignores any other framing with a warning.
 
 ## fprime-yamcs-events: Event Processor
 

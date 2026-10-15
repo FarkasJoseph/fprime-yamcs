@@ -202,12 +202,10 @@ class TestCommBridgeAutostart:
         with pytest.raises(Exception, match="needs fprime-comm-bridge"):
             check_framing_selection(args)
 
-    def test_fprime_framing_rejects_sdls(self, tmp_path):
-        key_file = tmp_path / "sdls.key"
-        key_file.write_bytes(bytes(32))
-        args = parse_comm_args("--framing-selection", "fprime", "--yamcs-sdls-key-file", str(key_file))
-        with pytest.raises(Exception, match="SDLS"):
-            check_framing_selection(args)
+    def test_unsupported_framing_falls_back_to_ccsds(self):
+        args = parse_comm_args("--framing-selection", "some-other-framing")
+        check_framing_selection(args)
+        assert args.framing_selection == "space-packet-space-data-link"
 
     def test_default_bridge_arguments(self):
         arguments = comm_bridge_arguments(parse_comm_args())
