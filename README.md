@@ -114,6 +114,31 @@ mdb:
 
 This is to allow for automatic dictionary generation. Users declining this service must specify: `--no-convert-dictionary`.
 
+## Multiple Deployments
+
+One YAMCS server can serve several F Prime deployments, each in its own YAMCS instance. Add one with
+`--yamcs-instance NAME DICTIONARY PORT`, once per extra deployment:
+
+```sh
+fprime-yamcs --yamcs-instance ref path/to/RefTopologyDictionary.json 50720
+```
+
+The new instance copies the first F Prime instance, the one `--dictionary` configures, but gets its own XTCE file, frame
+size and spacecraft ID from `DICTIONARY`. Files it downlinks go to the YAMCS bucket `fprimeFilesIn-NAME` and are copied
+to `FPRIME_DOWNLINK_DIR/NAME` (`/tmp/runner/fprime-downlink/NAME` by default). YAMCS takes its TM on UDP `PORT`, sends
+its TC to `PORT+1` and takes split telemetry on `PORT+2`. SDLS and `--yamcs-realtime-only-channels` apply only to the
+first instance.
+
+The launcher does not start these deployments. Start each one yourself. If a deployment does not talk UDP, put an
+[`fprime-comm-bridge`](#communication-bridge-fprime-comm-bridge) in front of it and pass the bridge that deployment's
+dictionary and its instance's UDP ports, `PORT` and `PORT+1`. Bridges listen on TCP port 50000 by default, so give each
+added bridge its own `--tcp-fast-port` and connect the deployment to that port:
+
+```sh
+fprime-comm-bridge --dictionary path/to/RefTopologyDictionary.json --tcp-fast-port 50010 \
+    --udp-fast-send-port 50720 --udp-fast-recv-port 50721
+```
+
 ## SDLS Encryption (AES-256-GCM)
 
 SDLS is off by default: frames are clear-text unless a key file is supplied. Deployments built on the

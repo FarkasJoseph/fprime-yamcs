@@ -283,6 +283,17 @@ class YamcsParser(ParserBase):
                 "help": "Specify the UDP port for re-injecting split telemetry channel packets into YAMCS. "
                         "Default: %(default)s",
             },
+            ("--yamcs-instance",): {
+                "action": "append",
+                "nargs": 3,
+                "default": [],
+                "dest": "yamcs_extra_instances",
+                "metavar": ("NAME", "DICTIONARY", "PORT"),
+                "help": "Add a YAMCS instance for another F Prime deployment, copied from the instance that "
+                        "--dictionary configures. It takes TM on UDP PORT, sends TC to PORT+1 and takes split "
+                        "telemetry on PORT+2. The launcher does not start that deployment or a comm bridge for it. "
+                        "Repeatable.",
+            },
             ("--yamcs-sdls-key-file",): {
                 "action": "store",
                 "default": None,
@@ -338,6 +349,11 @@ class YamcsParser(ParserBase):
                                 f"AES-256-GCM requires exactly {SDLS_AES_256_KEY_SIZE} bytes.")
             if not 0 < args.yamcs_sdls_spi <= 0xFFFF:
                 raise Exception(f"[ERROR] SDLS SPI {args.yamcs_sdls_spi} must be in the range 1-65535.")
+        args.yamcs_extra_instances = [(name, Path(dictionary), int(port))
+                                      for name, dictionary, port in args.yamcs_extra_instances]
+        for name, dictionary, _ in args.yamcs_extra_instances:
+            if not dictionary.is_file():
+                raise Exception(f"[ERROR] Dictionary {dictionary} for YAMCS instance {name} is not a file.")
         return args
 
 def yamcs_instances(config_directory: Path) -> List[str]:
@@ -488,7 +504,7 @@ def anchor_relative_mdb_paths(instance_config: dict, base_directory: Path) -> bo
     return changed
 
 
-def construct_temporary_configuration(config_directory: Path, instances: List[str], dictionary: Path, uplink_port: int, downlink_port: int, tm_inject_port: int, realtime_only_channels: List[str], sdls_key_file: Optional[Path] = None, sdls_spi: int = 1) -> Tuple[Path, str]:
+def construct_temporary_configuration(config_directory: Path, instances: List[str], dictionary: Path, uplink_port: int, downlink_port: int, tm_inject_port: int, realtime_only_channels: List[str], sdls_key_file: Optional[Path] = None, sdls_spi: int = 1, extra_instances: List[Tuple[str, Path, int]] = ()) -> Tuple[Path, str]:
     """ Construct a temporary YAMCS configuration directory
 
     The YAMCS configuration that ships with fprime-yamcs needs to be modified in several specific ways before running
@@ -499,6 +515,7 @@ def construct_temporary_configuration(config_directory: Path, instances: List[st
         4. Marking realtime-only telemetry channels as "do not archive" and switching the parameter
            archive to backfilling so those channels never reach the archives
         5. Optionally enabling SDLS AES-256-GCM decryption (TM) and encryption (TC) on the frame links
+        6. Adding a YAMCS instance for each extra F Prime deployment
     Args:
         config_directory: The YAMCS configuration directory to use as a base for the temporary configuration
         instances: A list of YAMCS instance names to consider for configuration
@@ -509,6 +526,7 @@ def construct_temporary_configuration(config_directory: Path, instances: List[st
         realtime_only_channels: Telemetry channel name patterns to keep realtime-only (not archived)
         sdls_key_file: 32-byte AES-256 key file enabling SDLS on the TM/TC frame links, or None to leave frames clear-text
         sdls_spi: SDLS security parameter index to use when sdls_key_file is set
+        extra_instances: The name, dictionary and TM port of each extra F Prime deployment
     Returns:
         The path to the temporary YAMCS configuration directory and the fprime identified instance
     """
@@ -520,9 +538,16 @@ def construct_temporary_configuration(config_directory: Path, instances: List[st
     # Copy the default configuration to the temporary directory
     shutil.copytree(config_directory, yamcs_working_config_dir, dirs_exist_ok=True)
     xtce_dictionary, fprime_instance = xtce_mdb_location(yamcs_working_config_dir, instances)
+    instance_path = yamcs_working_config_dir / "etc" / f"yamcs.{fprime_instance}.yaml"
+    assert instance_path.is_file(), f"YAMCS instance configuration {instance_path} not found."
 
     print(f"[INFO] Updating YAMCS XTCE dictionary from {dictionary} to {xtce_dictionary}")
     subprocess.run(["fprime-to-xtce", "-o", str(xtce_dictionary), str(dictionary)], check=True)
+
+    # Each extra instance starts as a copy of the first F Prime instance's file. We add them before configuring that
+    # file, so they don't get its realtime-only channels or SDLS key
+    for name, extra_dictionary, port in extra_instances:
+        add_fprime_instance(yamcs_working_config_dir, instance_path, name, extra_dictionary, port)
 
     # YAMCS is launched without a controlled working directory, so relative MDB paths in
     # every instance configuration must be anchored to the temporary configuration directory
@@ -534,10 +559,29 @@ def construct_temporary_configuration(config_directory: Path, instances: List[st
                 yaml.safe_dump(other_instance_config, f)
 
     print("[INFO] Setting ports for YAMCS UDP processors")
-    instance_path = yamcs_working_config_dir / "etc" / f"yamcs.{fprime_instance}.yaml"
-    assert instance_path.is_file(), f"YAMCS instance configuration {instance_path} not found."
     with instance_path.open() as f:
         instance_config = yaml.safe_load(f)
+    configure_fprime_instance(instance_config, dictionary, uplink_port, downlink_port, tm_inject_port,
+                              realtime_only_channels, sdls_key_file, sdls_spi)
+    with instance_path.open("w") as f:
+        yaml.safe_dump(instance_config, f)
+
+    return yamcs_working_config_dir, fprime_instance
+
+
+def configure_fprime_instance(instance_config: dict, dictionary: Path, uplink_port: int, downlink_port: int, tm_inject_port: int, realtime_only_channels: List[str], sdls_key_file: Optional[Path] = None, sdls_spi: int = 1):
+    """ Set the UDP ports, dictionary constants, realtime-only channels and SDLS settings of an F Prime instance
+
+    Args:
+        instance_config: a parsed yamcs.<instance>.yaml configuration, changed in place
+        dictionary: The path to the F Prime dictionary file of the instance's deployment
+        uplink_port: The UDP port to use for uplink (TC) communication with YAMCS
+        downlink_port: The UDP port to use for downlink (TM) communication with YAMCS
+        tm_inject_port: The UDP port to use for re-injecting split telemetry channel packets
+        realtime_only_channels: Telemetry channel name patterns to keep realtime-only (not archived)
+        sdls_key_file: 32-byte AES-256 key file enabling SDLS on the TM/TC frame links, or None to leave frames clear-text
+        sdls_spi: SDLS security parameter index to use when sdls_key_file is set
+    """
     frame_size = get_dictionary_constant(dictionary, "ComCfg.TmFrameFixedSize")
     spacecraft_id = get_dictionary_constant(dictionary, "ComCfg.SpacecraftId")
     realtime_only_ids = get_channel_ids(dictionary, realtime_only_channels)
@@ -591,10 +635,54 @@ def construct_temporary_configuration(config_directory: Path, instances: List[st
                 args = service.setdefault("args", {})
                 args.setdefault("realtimeFiller", {})["enabled"] = False
                 args.setdefault("backFiller", {})["automaticBackfilling"] = True
-    with instance_path.open("w") as f:
+
+
+def add_fprime_instance(config_directory: Path, first_instance_path: Path, name: str, dictionary: Path, port: int):
+    """ Add a YAMCS instance for another F Prime deployment, copied from the first F Prime instance
+
+    Args:
+        config_directory: The temporary YAMCS configuration directory
+        first_instance_path: The yamcs.<instance>.yaml file of the first F Prime instance
+        name: The name of the new instance
+        dictionary: The path to the F Prime dictionary file of the new instance's deployment
+        port: The UDP port of the new instance's TM link. Its TC link sends to port + 1, and its split telemetry link
+            listens on port + 2.
+    """
+    with first_instance_path.open() as f:
+        instance_config = yaml.safe_load(f)
+    xtce_file = f"mdb/{name}.xtce.xml"
+    print(f"[INFO] Adding YAMCS instance {name} with XTCE dictionary {xtce_file} from {dictionary}")
+    subprocess.run(["fprime-to-xtce", "-o", str(config_directory / xtce_file), str(dictionary)], check=True)
+    for mdb in instance_config.get("mdb", []):
+        if mdb.get("args", {}).get("file", "").endswith("fprime.xtce.xml"):
+            mdb["args"]["file"] = xtce_file
+    configure_fprime_instance(instance_config, dictionary, uplink_port=port + 1, downlink_port=port,
+                              tm_inject_port=port + 2, realtime_only_channels=[])
+
+    dictionary_path = str(dictionary.resolve())
+    for service in instance_config.get("services", []):
+        args = service.get("args", {})
+        command = args.get("command", [])
+        # We pass the helpers this instance's name, dictionary and inject port. Otherwise they read them from
+        # environment variables that the launcher sets for the whole YAMCS server, which describe the first instance.
+        if "fprime-yamcs-events" in command:
+            args["command"] += ["--instance", name, "--dictionary", dictionary_path]
+        elif "fprime-yamcs-tlmchan" in command:
+            args["command"] += ["--instance", name, "--dictionary", dictionary_path, "--inject-port", str(port + 2)]
+        elif service.get("class") == "com.example.myproject.FprimeFilePacketService":
+            # Buckets belong to the whole YAMCS server, and the downlinkMirrorDir we copied is the first instance's
+            # directory, so we give this instance its own bucket and subdirectory
+            args["bucket"] = f"{args.get('bucket', 'fprimeFilesIn')}-{name}"
+            args["downlinkMirrorDir"] = f"{args.get('downlinkMirrorDir', '/tmp/fprime-downlink')}/{name}"
+    with (config_directory / "etc" / f"yamcs.{name}.yaml").open("w") as f:
         yaml.safe_dump(instance_config, f)
 
-    return  yamcs_working_config_dir, fprime_instance
+    server_yaml = config_directory / "etc" / "yamcs.yaml"
+    with server_yaml.open() as f:
+        server_config = yaml.safe_load(f)
+    server_config["instances"].append(name)
+    with server_yaml.open("w") as f:
+        yaml.safe_dump(server_config, f, sort_keys=False)
 
 
 def yamcs_web_url(config_directory: Path) -> str:
@@ -756,7 +844,7 @@ def main():
         if not instances:
             raise Exception(f"No YAMCS instances found in {parsed_args.yamcs_config_dir / 'etc/yamcs.yaml'}")
 
-        yamcs_config_dir, fprime_instance = construct_temporary_configuration(parsed_args.yamcs_config_dir, instances, parsed_args.dictionary, parsed_args.udp_uplink_port, parsed_args.udp_downlink_port, parsed_args.udp_tm_inject_port, parsed_args.yamcs_realtime_only_channels, parsed_args.yamcs_sdls_key_file, parsed_args.yamcs_sdls_spi)
+        yamcs_config_dir, fprime_instance = construct_temporary_configuration(parsed_args.yamcs_config_dir, instances, parsed_args.dictionary, parsed_args.udp_uplink_port, parsed_args.udp_downlink_port, parsed_args.udp_tm_inject_port, parsed_args.yamcs_realtime_only_channels, parsed_args.yamcs_sdls_key_file, parsed_args.yamcs_sdls_spi, parsed_args.yamcs_extra_instances)
         parsed_args.yamcs_config_dir = yamcs_config_dir
         if parsed_args.yamcs_events_instance is None:
             parsed_args.yamcs_events_instance = fprime_instance
