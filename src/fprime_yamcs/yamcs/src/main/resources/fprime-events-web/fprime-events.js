@@ -182,12 +182,6 @@ function normalize(event) {
   const idNumber = parseInt(extra["fprime_event_id"], 10);
   const id = isNaN(idNumber) ? "" : "0x" + idNumber.toString(16).toUpperCase().padStart(4, "0");
   const name = extra["fprime_event_name"] || event.type || "";
-  // Strip the redundant "[EventName] " prefix that the processor prepends
-  let message = event.message || "";
-  const match = message.match(/^\[[^\]]*\] /);
-  if (match && name) {
-    message = message.substring(match[0].length);
-  }
   return {
     key: `${event.generationTime}-${event.seqNumber}`,
     time: event.generationTime,
@@ -195,7 +189,7 @@ function normalize(event) {
     idNumber: isNaN(idNumber) ? null : idNumber,
     name,
     severity,
-    message,
+    message: event.message || "",
   };
 }
 
