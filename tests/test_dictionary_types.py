@@ -3,6 +3,8 @@
 F Prime serializes string lengths with FwSizeStoreType, whose width is configured per project and
 published in the dictionary's typeDefinitions. The decoders must use that width rather than the
 fprime-gds default (U16), or every string argument is mis-parsed.
+
+The event processor must also keep an event whose arguments hold values their types don't allow.
 """
 
 import json
@@ -19,6 +21,7 @@ from fprime_yamcs.tlmchan.processor import FPrimeTlmChanProcessor
 
 
 EVENT_ID = 0x1000
+BAD_VALUES_EVENT_ID = 0x1001
 CHANNEL_ID = 0x2000
 MESSAGE = "test string 0.123456789 abcdefghijk"
 
@@ -57,6 +60,12 @@ def write_dictionary(tmp_path, size_store_bits: int):
                 "type": integer_type("U32", 32),
                 "underlyingType": integer_type("U32", 32),
             },
+            {
+                "kind": "enum",
+                "qualifiedName": "Comp.State",
+                "representationType": integer_type("U16", 16),
+                "enumeratedConstants": [{"name": "OFF", "value": 0}, {"name": "ON", "value": 1}],
+            },
         ],
         "constants": [],
         "commands": [],
@@ -68,7 +77,19 @@ def write_dictionary(tmp_path, size_store_bits: int):
                 "formalParams": [{"name": "message", "type": string_type, "ref": False}],
                 "id": EVENT_ID,
                 "format": "message={}",
-            }
+            },
+            {
+                "name": "Comp.BadValuesEvent",
+                "severity": "WARNING_HI",
+                "formalParams": [
+                    {"name": "state", "type": {"name": "Comp.State", "kind": "qualifiedIdentifier"}, "ref": False},
+                    {"name": "enabled", "type": {"name": "bool", "kind": "bool", "size": 8}, "ref": False},
+                    {"name": "message", "type": string_type, "ref": False},
+                    {"name": "count", "type": integer_type("U32", 32), "ref": False},
+                ],
+                "id": BAD_VALUES_EVENT_ID,
+                "format": "state={} enabled={} message={} count={}",
+            },
         ],
         "telemetryChannels": [
             {
@@ -127,6 +148,23 @@ def test_event_string_decoded_with_dictionary_size_type(tmp_path, size_store_bit
 
     assert len(events) == 1
     assert events[0].get_args()[0].val == MESSAGE
+
+
+def test_event_with_bad_values_decoded(tmp_path):
+    processor = FPrimeEventProcessor.__new__(FPrimeEventProcessor)
+    processor.dictionary_path = write_dictionary(tmp_path, 16)
+    processor._init_fprime_decoder()
+
+    # An enum value with no label, a bool byte that is neither 0x00 nor 0xFF, and 41 characters in a
+    # 40-character string, followed by a valid U32
+    long_message = "x" * 41
+    args = struct.pack(">HB", 9, 1) + serialize_string(long_message, 16) + struct.pack(">I", 42)
+    body = struct.pack(">I", BAD_VALUES_EVENT_ID) + TimeType().serialize() + args
+    event_data = processor._extract_event_data(make_packet(FPrimeEventProcessor.APID_EVENT, body))
+    events = processor.event_decoder.decode_api(event_data)
+
+    assert [arg.val for arg in events[0].get_args()] == [9, 1, long_message, 42]
+    assert events[0].get_display_text() == f"state=9 enabled=1 message={long_message} count=42"
 
 
 @pytest.mark.parametrize("size_store_bits", [16, 32, 64])
