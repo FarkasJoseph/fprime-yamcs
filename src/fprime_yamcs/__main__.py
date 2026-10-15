@@ -45,6 +45,7 @@ from fprime_gds.plugin.system import Plugins
 from fprime_gds.common.communication.bridge import DEFAULT_COMMUNICATION, DEFAULT_FRAMING
 from fprime_gds.executables.comm_bridge import GROUND_ADAPTER as BRIDGE_GROUND_ADAPTER
 
+from fprime_yamcs.framing import FprimeSpacePacketFramerDeframer
 from fprime_yamcs.java import (
     JavaResolutionException,
     build_classpath,
@@ -65,8 +66,15 @@ DIRECT_COMMUNICATION_SELECTIONS = {"udp", "none"}
 BRIDGE_GROUND_SELECTION = BRIDGE_GROUND_ADAPTER.get_name()
 BRIDGE_GROUND_OPTION_PREFIX = f"--{BRIDGE_GROUND_SELECTION}-"
 
-# The launcher only selects the communication adapter; framing is fixed to the bridge default
+# The launcher loads only the communication plugins, because most fprime-gds framings do not work with the YAMCS links
 LAUNCHER_PLUGIN_CATEGORIES = ["communication"]
+# The bridge plugin for each framing a deployment can use, keyed by the fprime-gds framing name. YAMCS decodes CCSDS
+# frames itself, so the bridge only regroups the byte stream into whole frames. F Prime frames are converted into
+# Space Packets.
+BRIDGE_FRAMINGS = {
+    "space-packet-space-data-link": DEFAULT_FRAMING,
+    "fprime": FprimeSpacePacketFramerDeframer.get_name(),
+}
 
 
 def sdls_encryption_config(key_file: Path, spi: int) -> Dict[str, Any]:
@@ -158,12 +166,29 @@ def check_communication_selection(communication_selection: str):
         )
 
 
+def check_framing_selection(parsed_args):
+    """ Fall back to CCSDS framing for a framing the YAMCS links can't take, and reject F Prime framing without a bridge
+
+    Args:
+        parsed_args: parsed argument namespace, whose framing_selection may be reset to the default
+    """
+    if parsed_args.framing_selection not in BRIDGE_FRAMINGS:
+        # fprime-gds.yml is shared with fprime-gds, which offers framings YAMCS can't use, so we ignore them
+        print(f"[WARNING] Ignoring framing selection '{parsed_args.framing_selection}', which fprime-yamcs does not "
+              "support. Using space-packet-space-data-link.")
+        parsed_args.framing_selection = "space-packet-space-data-link"
+    if parsed_args.framing_selection == "fprime" and parsed_args.communication_selection == "udp":
+        raise Exception("[ERROR] F Prime framing needs fprime-comm-bridge to convert frames, and a 'udp' deployment "
+                        "talks to YAMCS directly. Select a bridged adapter (e.g. tcp-fast-server, uart) instead.")
+
+
 def comm_bridge_arguments(parsed_args) -> List[str]:
     """ Build the fprime-comm-bridge command line arguments matching the launcher's arguments
 
-    Reproduces the communication plugin selection and options as supplied to the launcher, selects the TM frame
-    aggregating framer fed by the launcher's dictionary (frame size and spacecraft ID), and points the bridge's
-    `udp-fast` ground adapter at the configured YAMCS TM (downlink) and TC (uplink) UDP ports on loopback.
+    Reproduces the communication plugin selection and options as supplied to the launcher, selects the bridge framing
+    plugin for the deployment's framing, passes the launcher's dictionary (tm-frame-aggregator reads the frame size and
+    spacecraft ID from it), and points the bridge's `udp-fast` ground adapter at the configured YAMCS TM (downlink)
+    and TC (uplink) UDP ports on loopback.
 
     Args:
         parsed_args: parsed argument namespace
@@ -175,7 +200,8 @@ def comm_bridge_arguments(parsed_args) -> List[str]:
         BRIDGE_GROUND_OPTION_PREFIX,
     )
     return communication_arguments + [
-        "--framing-selection", DEFAULT_FRAMING, "--dictionary", str(Path(parsed_args.dictionary).resolve()),
+        "--framing-selection", BRIDGE_FRAMINGS[parsed_args.framing_selection],
+        "--dictionary", str(Path(parsed_args.dictionary).resolve()),
         "--udp-fast-address", "127.0.0.1", "--udp-fast-send-port", str(parsed_args.udp_downlink_port),
         "--udp-fast-bind-address", "127.0.0.1", "--udp-fast-recv-port", str(parsed_args.udp_uplink_port),
     ]
@@ -263,6 +289,11 @@ class YamcsParser(ParserBase):
                 "help": "Extra YAMCS plugin jars (or directories of jars) appended to the YAMCS "
                         "classpath. Plugin jars shipped by installed pip packages "
                         "(fprime_yamcs.plugin_jars entry points) are added automatically.",
+            },
+            ("--framing-selection",): {
+                "default": "space-packet-space-data-link",
+                "help": "Framing the deployment uses: CCSDS TM/TC frames (space-packet-space-data-link) or F Prime "
+                        "frames (fprime). [default: %(default)s]",
             },
             ("--udp-uplink-port", ): {
                 "action": "store",
@@ -488,7 +519,29 @@ def anchor_relative_mdb_paths(instance_config: dict, base_directory: Path) -> bo
     return changed
 
 
-def construct_temporary_configuration(config_directory: Path, instances: List[str], dictionary: Path, uplink_port: int, downlink_port: int, tm_inject_port: int, realtime_only_channels: List[str], sdls_key_file: Optional[Path] = None, sdls_spi: int = 1) -> Tuple[Path, str]:
+def tm_packet_link(frame_link: dict) -> dict:
+    """ Build a UDP packet link that takes the place of a TM frame link
+
+    Args:
+        frame_link: an org.yamcs.tctm.ccsds.UdpTmFrameLink configuration with a single virtual channel
+    Returns:
+        an org.yamcs.tctm.UdpTmDataLink configuration with the frame link's port and its virtual channel's settings
+    """
+    virtual_channel = frame_link["virtualChannels"][0]
+    packet_link = {
+        "name": frame_link["name"],
+        "class": "org.yamcs.tctm.UdpTmDataLink",
+        "port": frame_link["port"],
+        "stream": virtual_channel["stream"],
+        "maxLength": virtual_channel["maxPacketLength"],
+        "packetPreprocessorClassName": virtual_channel["packetPreprocessorClassName"],
+    }
+    if "packetPreprocessorArgs" in virtual_channel:
+        packet_link["packetPreprocessorArgs"] = virtual_channel["packetPreprocessorArgs"]
+    return packet_link
+
+
+def construct_temporary_configuration(config_directory: Path, instances: List[str], dictionary: Path, uplink_port: int, downlink_port: int, tm_inject_port: int, realtime_only_channels: List[str], sdls_key_file: Optional[Path] = None, sdls_spi: int = 1, fprime_framing: bool = False) -> Tuple[Path, str]:
     """ Construct a temporary YAMCS configuration directory
 
     The YAMCS configuration that ships with fprime-yamcs needs to be modified in several specific ways before running
@@ -499,6 +552,7 @@ def construct_temporary_configuration(config_directory: Path, instances: List[st
         4. Marking realtime-only telemetry channels as "do not archive" and switching the parameter
            archive to backfilling so those channels never reach the archives
         5. Optionally enabling SDLS AES-256-GCM decryption (TM) and encryption (TC) on the frame links
+        6. Taking TM as Space Packets instead of frames when the deployment uses F Prime framing
     Args:
         config_directory: The YAMCS configuration directory to use as a base for the temporary configuration
         instances: A list of YAMCS instance names to consider for configuration
@@ -509,6 +563,7 @@ def construct_temporary_configuration(config_directory: Path, instances: List[st
         realtime_only_channels: Telemetry channel name patterns to keep realtime-only (not archived)
         sdls_key_file: 32-byte AES-256 key file enabling SDLS on the TM/TC frame links, or None to leave frames clear-text
         sdls_spi: SDLS security parameter index to use when sdls_key_file is set
+        fprime_framing: True when the deployment uses F Prime framing, which the bridge converts to Space Packets
     Returns:
         The path to the temporary YAMCS configuration directory and the fprime identified instance
     """
@@ -542,7 +597,8 @@ def construct_temporary_configuration(config_directory: Path, instances: List[st
     spacecraft_id = get_dictionary_constant(dictionary, "ComCfg.SpacecraftId")
     realtime_only_ids = get_channel_ids(dictionary, realtime_only_channels)
     realtime_only_packet_ids = get_packet_ids(dictionary, realtime_only_channels) if realtime_only_channels else []
-    for link in instance_config.get("dataLinks", []):
+    data_links = instance_config.get("dataLinks", [])
+    for index, link in enumerate(data_links):
         print(link)
         if link.get("class", "") == "org.yamcs.tctm.ccsds.UdpTmFrameLink":
             print(f"[INFO] Setting downlink port for TM link {link.get('name', '')} to {downlink_port}")
@@ -563,6 +619,12 @@ def construct_temporary_configuration(config_directory: Path, instances: List[st
             if sdls_key_file is not None:
                 print(f"[INFO] Enabling SDLS AES-256-GCM decryption (SPI {sdls_spi}) for TM link {link.get('name', '')}")
                 link["encryption"] = [sdls_encryption_config(sdls_key_file, sdls_spi)]
+            if fprime_framing:
+                # With F Prime framing the bridge sends Space Packets rather than TM frames, so we replace this link
+                # with a packet link on the same port. Swapping it before this loop would send it through the
+                # UdpTmDataLink branch below, which moves it to the tm-inject port.
+                print(f"[INFO] Taking Space Packets on TM link {link.get('name', '')} for F Prime framing")
+                data_links[index] = tm_packet_link(link)
         elif link.get("class", "") == "org.yamcs.tctm.UdpTmDataLink":
             print(f"[INFO] Setting split telemetry injection port for TM link {link.get('name', '')} to {tm_inject_port}")
             link["port"] = tm_inject_port
@@ -746,6 +808,7 @@ def main():
     try:
         launched_bridges = []
         check_communication_selection(parsed_args.communication_selection)
+        check_framing_selection(parsed_args)
         if needs_comm_bridge(parsed_args.communication_selection):
             check_comm_bridge_ports(parsed_args)
             print(f"[INFO] Bridging '{parsed_args.communication_selection}' communication to YAMCS with fprime-comm-bridge")
@@ -755,7 +818,7 @@ def main():
         if not instances:
             raise Exception(f"No YAMCS instances found in {parsed_args.yamcs_config_dir / 'etc/yamcs.yaml'}")
 
-        yamcs_config_dir, fprime_instance = construct_temporary_configuration(parsed_args.yamcs_config_dir, instances, parsed_args.dictionary, parsed_args.udp_uplink_port, parsed_args.udp_downlink_port, parsed_args.udp_tm_inject_port, parsed_args.yamcs_realtime_only_channels, parsed_args.yamcs_sdls_key_file, parsed_args.yamcs_sdls_spi)
+        yamcs_config_dir, fprime_instance = construct_temporary_configuration(parsed_args.yamcs_config_dir, instances, parsed_args.dictionary, parsed_args.udp_uplink_port, parsed_args.udp_downlink_port, parsed_args.udp_tm_inject_port, parsed_args.yamcs_realtime_only_channels, parsed_args.yamcs_sdls_key_file, parsed_args.yamcs_sdls_spi, parsed_args.framing_selection == "fprime")
         parsed_args.yamcs_config_dir = yamcs_config_dir
         if parsed_args.yamcs_events_instance is None:
             parsed_args.yamcs_events_instance = fprime_instance

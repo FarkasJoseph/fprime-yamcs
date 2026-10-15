@@ -23,6 +23,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import yaml
 
 from fprime_gds.executables.cli import ParserBase
 from fprime_gds.plugin.system import Plugins
@@ -35,7 +36,9 @@ from fprime_yamcs.__main__ import (
     anchor_relative_mdb_paths,
     check_comm_bridge_ports,
     check_communication_selection,
+    check_framing_selection,
     comm_bridge_arguments,
+    construct_temporary_configuration,
     get_dictionary_constant,
     launch_comm_bridge,
     launch_deployment_app,
@@ -184,9 +187,20 @@ class TestCommBridgeAutostart:
     def test_none_selection_needs_no_bridge(self):
         assert needs_comm_bridge("none") is False
 
-    def test_launcher_exposes_only_communication_plugins(self):
-        args = parse_comm_args()
-        assert not hasattr(args, "framing_selection")
+    def test_fprime_framing_runs_the_fprime_yamcs_plugin(self):
+        arguments = comm_bridge_arguments(parse_comm_args("--framing-selection", "fprime"))
+        assert contains_sequence(arguments, ["--framing-selection", "fprime-space-packet"])
+
+    def test_fprime_framing_rejects_udp(self):
+        check_framing_selection(parse_comm_args("--communication-selection", "udp"))
+        args = parse_comm_args("--communication-selection", "udp", "--framing-selection", "fprime")
+        with pytest.raises(Exception, match="needs fprime-comm-bridge"):
+            check_framing_selection(args)
+
+    def test_unsupported_framing_falls_back_to_ccsds(self):
+        args = parse_comm_args("--framing-selection", "some-other-framing")
+        check_framing_selection(args)
+        assert args.framing_selection == "space-packet-space-data-link"
 
     def test_default_bridge_arguments(self):
         arguments = comm_bridge_arguments(parse_comm_args())
@@ -293,6 +307,32 @@ class TestCommBridgeAutostart:
         assert command[:4] == [sys.executable, "-u", "-m", "fprime_gds.executables.comm_bridge"]
         assert command[4:] == comm_bridge_arguments(args)
         assert launch.call_args.kwargs["name"] == "fprime-comm-bridge[ip]"
+
+
+class TestConstructTemporaryConfiguration:
+    """construct_temporary_configuration rewrites the shipped YAMCS data links"""
+
+    def test_fprime_framing_takes_packets_on_downlink_port(self, tmp_path):
+        dictionary = tmp_path / "dictionary.json"
+        dictionary.write_text(json.dumps({
+            "constants": [{"qualifiedName": "ComCfg.TmFrameFixedSize", "value": 1024},
+                          {"qualifiedName": "ComCfg.SpacecraftId", "value": 68}],
+            "telemetryChannels": [{"id": 7, "name": "Ref.blockDrv.BD_Cycles"}],
+        }))
+        shipped_config = Path(main_module.__file__).parent / "yamcs" / "src" / "main" / "yamcs"
+        with patch.object(main_module.subprocess, "run"):
+            config_dir, instance = construct_temporary_configuration(
+                shipped_config, ["fprime-project"], dictionary, 60001, 60000, 60002, ["Ref.blockDrv.*"],
+                fprime_framing=True)
+        with (config_dir / "etc" / f"yamcs.{instance}.yaml").open() as f:
+            links = {link["name"]: link for link in yaml.safe_load(f)["dataLinks"]}
+        assert links["UDP_TM_IN"] == {
+            "name": "UDP_TM_IN", "class": "org.yamcs.tctm.UdpTmDataLink", "port": 60000, "stream": "tm_realtime",
+            "maxLength": 65542, "packetPreprocessorClassName": "com.example.myproject.FprimePacketPreprocessor",
+            "packetPreprocessorArgs": {"doNotArchiveChannelIds": [7]},
+        }
+        assert links["UDP_TM_SPLIT_IN"]["port"] == 60002
+        assert links["UDP_TC_OUT"]["class"] == "org.yamcs.tctm.ccsds.UdpTcFrameLink"
 
 
 class TestMavenFallback:
