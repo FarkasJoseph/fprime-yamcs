@@ -31,7 +31,7 @@ def parse_args():
     """
     parser = argparse.ArgumentParser(description='FPrime Event Processor for YAMCS')
     parser.add_argument('--yamcs-url',
-        default='http://localhost:8090',
+        default=os.environ.get('FPRIME_YAMCS_URL', 'http://localhost:8090'),
         help='YAMCS server URL (default: http://localhost:8090)'
     )
     parser.add_argument(
