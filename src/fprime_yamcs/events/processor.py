@@ -31,8 +31,39 @@ from yamcs.client import Packet
 from fprime_gds.common.loaders.event_json_loader import EventJsonLoader
 from fprime_gds.common.decoders.event_decoder import EventDecoder
 from fprime_gds.common.models.dictionaries import Dictionaries
+from fprime_gds.common.models.serialize.enum_type import EnumType
+from fprime_gds.common.models.serialize.numerical_types import U8Type
+from fprime_gds.common.models.serialize.string_type import StringType
+from fprime_gds.common.models.serialize.type_exceptions import StringSizeException, TypeRangeException
 from fprime_gds.common.utils.config_manager import ConfigManager
 from .logging import logger
+
+
+class LenientEventDecoder(EventDecoder):
+    """An EventDecoder that keeps an event when an argument holds a value its type doesn't allow"""
+
+    # EventDecoder.decode_api calls this to read each event's arguments
+    @staticmethod
+    def decode_args(arg_data, offset, template):
+        args = []
+        for _, _, arg_type in template.get_args():
+            arg = arg_type()
+            try:
+                arg.deserialize(arg_data, offset)
+            except TypeRangeException:
+                # fprime-gds raises an error for an enum value that has no label, or for a bool byte
+                # other than 0x00 or 0xFF. Rather than drop the whole event, we read the raw number.
+                arg = arg.REP_TYPE() if isinstance(arg, EnumType) else U8Type()
+                arg.deserialize(arg_data, offset)
+            except StringSizeException:
+                # fprime-gds also raises an error for a string longer than its type's maximum length,
+                # so we read the whole string.
+                arg = StringType.construct_type("UnboundedString")()
+                arg.deserialize(arg_data, offset)
+            args.append(arg)
+            offset += arg.getSize()
+        return [offset, tuple(args)]
+
 
 class FPrimeEventProcessor:
     """
@@ -93,7 +124,7 @@ class FPrimeEventProcessor:
         event_dict = event_loader.get_id_dict(str(self.dictionary_path))
         
         # Create the event decoder
-        self.event_decoder = EventDecoder(event_dict)
+        self.event_decoder = LenientEventDecoder(event_dict)
         logger.info(f"Loaded {len(event_dict)} event definitions")
         
     def _extract_event_data(self, packet_data: bytes) -> Optional[bytes]:
