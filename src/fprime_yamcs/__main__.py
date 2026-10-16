@@ -667,6 +667,7 @@ def launch_yamcs(parsed_args):
     environment["FPRIME_DICTIONARY"] = parsed_args.dictionary
     environment["FPRIME_YAMCS_INSTANCE"] = parsed_args.yamcs_events_instance
     environment["FPRIME_YAMCS_TM_INJECT_PORT"] = str(parsed_args.udp_tm_inject_port)
+    environment["FPRIME_YAMCS_URL"] = yamcs_web_url(parsed_args.yamcs_config_dir)
 
     print(f"[INFO] Using FPRIME_DICTIONARY: {environment['FPRIME_DICTIONARY']}")
     print(f"[INFO] Using FPRIME_YAMCS_INSTANCE: {environment['FPRIME_YAMCS_INSTANCE']}")

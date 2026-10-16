@@ -39,6 +39,7 @@ from fprime_yamcs.__main__ import (
     get_dictionary_constant,
     launch_comm_bridge,
     launch_deployment_app,
+    launch_yamcs,
     launch_yamcs_maven,
     needs_comm_bridge,
     without_options,
@@ -293,6 +294,21 @@ class TestCommBridgeAutostart:
         assert command[:4] == [sys.executable, "-u", "-m", "fprime_gds.executables.comm_bridge"]
         assert command[4:] == comm_bridge_arguments(args)
         assert launch.call_args.kwargs["name"] == "fprime-comm-bridge[ip]"
+
+
+class TestHelperYamcsUrl:
+    """The launcher hands its helpers the YAMCS server URL from yamcs.yaml"""
+
+    def test_launcher_sets_url_from_http_port(self, tmp_path):
+        (tmp_path / "etc").mkdir()
+        (tmp_path / "etc" / "yamcs.yaml").write_text(
+            "services:\n  - class: org.yamcs.http.HttpServer\n    args:\n      port: 8694\n")
+        args = make_args(tmp_path, dictionary=str(DICTIONARY), yamcs_events_instance="fprime-project",
+                         udp_tm_inject_port=50002, yamcs_data_dir=tmp_path / "data")
+        with patch.object(main_module, "build_classpath"), patch.object(main_module, "find_java"):
+            with patch.object(main_module, "launch_process") as launch:
+                launch_yamcs(args)
+        assert launch.call_args.kwargs["env"]["FPRIME_YAMCS_URL"] == "http://127.0.0.1:8694/"
 
 
 class TestMavenFallback:
