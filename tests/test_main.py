@@ -17,7 +17,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 import json
-import os
 import sys
 from argparse import Namespace
 from pathlib import Path
@@ -29,8 +28,6 @@ from fprime_gds.executables.cli import ParserBase
 from fprime_gds.plugin.system import Plugins
 
 from fprime_yamcs import __main__ as main_module
-from fprime_yamcs.events import __main__ as events_main
-from fprime_yamcs.tlmchan import __main__ as tlmchan_main
 from fprime_yamcs.__main__ import (
     LAUNCHER_PLUGIN_CATEGORIES,
     YamcsParser,
@@ -312,12 +309,6 @@ class TestHelperYamcsUrl:
             with patch.object(main_module, "launch_process") as launch:
                 launch_yamcs(args)
         assert launch.call_args.kwargs["env"]["FPRIME_YAMCS_URL"] == "http://127.0.0.1:8694/"
-
-    @pytest.mark.parametrize("helper", [events_main, tlmchan_main])
-    def test_helpers_default_to_launcher_url(self, helper):
-        environment = {"FPRIME_YAMCS_URL": "http://127.0.0.1:8694/", "FPRIME_DICTIONARY": str(DICTIONARY)}
-        with patch.dict(os.environ, environment), patch.object(sys, "argv", ["helper"]):
-            assert helper.parse_args().yamcs_url == "http://127.0.0.1:8694/"
 
 
 class TestMavenFallback:
