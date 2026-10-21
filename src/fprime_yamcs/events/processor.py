@@ -235,9 +235,6 @@ class FPrimeEventProcessor:
             severity_str = str(severity).upper().split(".")[-1]
             yamcs_severity = severity_mapping.get(severity_str, 'info')
             
-            # Build event message
-            message = f"[{event_name}] {display_text}"
-            
             # Structured metadata preserving the full F Prime severity set (7
             # levels vs YAMCS's 5) and the numeric event ID for downstream
             # consumers (e.g. the F Prime Events web extension)
@@ -277,7 +274,7 @@ class FPrimeEventProcessor:
                 source='FPrimeEventProcessor',
                 event_type=qualified_name,
                 severity=yamcs_severity,
-                message=message,
+                message=display_text,
                 extra={**event_args, **event_extra},
                 time=generation_time,
             )
