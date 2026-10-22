@@ -64,6 +64,7 @@ import org.yamcs.xtce.MetaCommand;
 import org.yamcs.xtce.SpaceSystem;
 import org.yamcs.tctm.Link;
 import org.yamcs.tctm.ccsds.TcPacketHandler;
+import org.yamcs.utils.TimeEncoding;
 import org.yamcs.yarch.Stream;
 import org.yamcs.yarch.StreamSubscriber;
 import org.yamcs.yarch.Tuple;
@@ -935,7 +936,7 @@ public class FprimeFilePacketService extends AbstractFileTransferService impleme
             long id = transferIdSeq.getAndIncrement();
             api = new FprimeFileTransfer(id, bucketName, dst, src,
                     fileSize, TransferDirection.DOWNLOAD);
-            api.setStartTime(System.currentTimeMillis());
+            api.setStartTime(TimeEncoding.getWallclockTime());
             transfers.put(id, api);
             LOG.info("Unsolicited downlink; created transfer record id={}", id);
         } else {
@@ -1174,7 +1175,7 @@ public class FprimeFilePacketService extends AbstractFileTransferService impleme
                 sourcePath,         // path on F´ we requested
                 -1,                 // total size unknown until Start packet arrives
                 TransferDirection.DOWNLOAD);
-        transfer.setStartTime(System.currentTimeMillis());
+        transfer.setStartTime(TimeEncoding.getWallclockTime());
         transfers.put(id, transfer);
         pendingDownloadsByPath.put(destPath, transfer);
         notifyStateChanged(transfer);
@@ -1302,7 +1303,7 @@ public class FprimeFilePacketService extends AbstractFileTransferService impleme
         if (cmdId == null) return;
         try {
             commandHistoryPublisher.publishAck(cmdId, VERIFIER_KEY,
-                    System.currentTimeMillis(), status, message);
+                    TimeEncoding.getWallclockTime(), status, message);
         } catch (Exception e) {
             LOG.debug("Failed to publish verifier ack for transfer {}",
                     transfer.getId(), e);
@@ -1315,7 +1316,7 @@ public class FprimeFilePacketService extends AbstractFileTransferService impleme
 
     private void runUplink(FprimeFileTransfer transfer, byte[] content) {
         try {
-            transfer.setStartTime(System.currentTimeMillis());
+            transfer.setStartTime(TimeEncoding.getWallclockTime());
             LOG.info("Uplink START: id={} bucket={} object={} -> {} ({} bytes)",
                     transfer.getId(), transfer.getBucketName(), transfer.getObjectName(),
                     transfer.getRemotePath(), content.length);
@@ -1364,7 +1365,7 @@ public class FprimeFilePacketService extends AbstractFileTransferService impleme
         private final String remotePath;
         private volatile long totalSize;
         private final TransferDirection direction;
-        private final long creationTime = System.currentTimeMillis();
+        private final long creationTime = TimeEncoding.getWallclockTime();
 
         private volatile long startTime;
         private volatile long transferredSize;
@@ -1440,7 +1441,7 @@ public class FprimeFilePacketService extends AbstractFileTransferService impleme
     private void sendFilePacket(byte[] innerWithDescriptor) throws Exception {
         byte[] spacePacket = buildSpacePacket(innerWithDescriptor, 0);
         CommandId cmdId = CommandId.newBuilder()
-                .setGenerationTime(System.currentTimeMillis())
+                .setGenerationTime(TimeEncoding.getWallclockTime())
                 .setOrigin("FprimeFilePacketService")
                 .setSequenceNumber(uplinkCmdSeq++)
                 .setCommandName("FprimeFilePacketService/uplinkFilePacket")
