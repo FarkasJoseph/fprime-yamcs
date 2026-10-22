@@ -33,7 +33,7 @@ public class FprimeCommandPostprocessor implements CommandPostprocessor {
 
     // Per-APID CCSDS sequence counters, starting at 0 to match F Prime's
     // ApidManager expectation (Yamcs' CcsdsSeqCountFiller starts at 1).
-    private static final Map<Integer, Integer> seqCounts = new HashMap<>();
+    private final Map<Integer, Integer> seqCounts = new HashMap<>();
     private CommandHistoryPublisher commandHistory;
 
     // Constructor used when this postprocessor is used without YAML configuration
@@ -81,7 +81,7 @@ public class FprimeCommandPostprocessor implements CommandPostprocessor {
     }
 
     /** Patches the next per-APID sequence count into the packet and returns it. */
-    private static synchronized int fillSeqCount(byte[] binary) {
+    private synchronized int fillSeqCount(byte[] binary) {
         int apid = ByteArrayUtils.decodeUnsignedShort(binary, 0) & 0x07FF;
         int seqCount = seqCounts.getOrDefault(apid, 0);
         seqCounts.put(apid, (seqCount + 1) % (1 << 14));
