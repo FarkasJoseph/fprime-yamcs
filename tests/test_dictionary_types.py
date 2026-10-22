@@ -7,6 +7,7 @@ fprime-gds default (U16), or every string argument is mis-parsed.
 
 import json
 import struct
+from types import SimpleNamespace
 
 import pytest
 
@@ -209,6 +210,23 @@ def test_event_with_bad_values_decoded_as_raw_values(tmp_path):
 
     assert [arg.val for arg in events[0].get_args()] == [9, 1, long_message, 42]
     assert events[0].get_display_text() == f"state=9 enabled=1 message={long_message} count=42"
+
+
+def test_event_extra_carries_time_tag(tmp_path):
+    processor = FPrimeEventProcessor.__new__(FPrimeEventProcessor)
+    processor.dictionary_path = write_dictionary(tmp_path, 16)
+    processor._init_fprime_decoder()
+    processor.yamcs_instance = "test"
+    sent = []
+    processor.yamcs_client = SimpleNamespace(send_event=lambda **event: sent.append(event))
+
+    time_tag = TimeType(TimeType.TimeBase("TB_WORKSTATION_TIME"), time_context=1, seconds=1792690838, useconds=5048)
+    body = struct.pack(">I", COUNT_EVENT_ID) + time_tag.serialize() + struct.pack(">I", 7)
+    processor._process_event_packet(FakePacket(make_packet(FPrimeEventProcessor.APID_EVENT, body)))
+
+    assert sent[0]["extra"]["fprime_sclk"] == "1792690838.005048"
+    assert sent[0]["extra"]["fprime_time_base"] == "TB_WORKSTATION_TIME"
+    assert sent[0]["extra"]["fprime_time_context"] == "1"
 
 
 @pytest.mark.parametrize("size_store_bits", [16, 32, 64])

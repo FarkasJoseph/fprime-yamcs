@@ -270,10 +270,14 @@ class FPrimeEventProcessor:
             # levels vs YAMCS's 5) and the numeric event ID for downstream
             # consumers (e.g. the F Prime Events web extension)
             fprime_severity = severity_str.replace("SEVERITY_", "")
+            time_tag = event_data.time
             event_extra = {
                 "fprime_severity": fprime_severity,
                 "fprime_event_id": str(event_id),
                 "fprime_event_name": qualified_name,
+                "fprime_sclk": f"{time_tag.seconds}.{time_tag.useconds:06d}",
+                "fprime_time_base": time_tag.timeBase.val,
+                "fprime_time_context": str(time_tag.timeContext),
             }
             
             # Get event arguments as key-value pairs

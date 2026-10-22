@@ -48,6 +48,8 @@ For a deployment that uses F Prime framing (`Svc.FprimeFramer`/`Svc.FprimeDefram
 
 `fprime-yamcs-events` runs the F Prime event processor standalone: it reads the F Prime JSON topology dictionary and publishes F Prime events into YAMCS. It is launched automatically by `fprime-yamcs`; run it directly when operating YAMCS without the full `fprime-yamcs` launcher.
 
+The processor also puts each event's F Prime time tag in the YAMCS event's `extra` map: `fprime_sclk` (`<seconds>.<microseconds>`, with the microseconds zero-padded to six digits, e.g. `1792690838.005048`), `fprime_time_base` (e.g. `TB_WORKSTATION_TIME`) and `fprime_time_context` (e.g. `0`).
+
 ### F´ Events Web Display
 
 The YAMCS web interface gains an **F´ Events** page (sidebar item, served at `/ext/fprime-events`) providing the event display F Prime developers know from `fprime-gds`:
