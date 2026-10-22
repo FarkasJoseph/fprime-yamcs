@@ -23,6 +23,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import yaml
 
 from fprime_gds.executables.cli import ParserBase
 from fprime_gds.plugin.system import Plugins
@@ -36,6 +37,7 @@ from fprime_yamcs.__main__ import (
     check_comm_bridge_ports,
     check_communication_selection,
     comm_bridge_arguments,
+    construct_temporary_configuration,
     get_dictionary_constant,
     launch_comm_bridge,
     launch_deployment_app,
@@ -56,6 +58,7 @@ def make_args(tmp_path, **overrides):
         "yamcs_plugin_jars": [],
         "yamcs_sdls_key_file": None,
         "yamcs_sdls_spi": 1,
+        "yamcs_extra_instances": [],
     }
     values.update(overrides)
     return Namespace(**values)
@@ -309,6 +312,51 @@ class TestHelperYamcsUrl:
             with patch.object(main_module, "launch_process") as launch:
                 launch_yamcs(args)
         assert launch.call_args.kwargs["env"]["FPRIME_YAMCS_URL"] == "http://127.0.0.1:8694/"
+
+
+class TestExtraInstances:
+    """--yamcs-instance adds a YAMCS instance for another deployment"""
+
+    def write_dictionary(self, path, frame_size, spacecraft_id):
+        path.write_text(json.dumps({"constants": [
+            {"qualifiedName": "ComCfg.TmFrameFixedSize", "value": frame_size},
+            {"qualifiedName": "ComCfg.SpacecraftId", "value": spacecraft_id},
+        ]}))
+        return path
+
+    def test_repeated_flag_gives_name_path_and_port(self, tmp_path):
+        ref = tmp_path / "Ref.json"
+        ref.touch()
+        args = parse_comm_args("--yamcs-instance", "ref", str(ref), "50720", "--yamcs-instance", "b", str(ref), "50710")
+        assert args.yamcs_extra_instances == [("ref", ref, 50720), ("b", ref, 50710)]
+
+    def test_instance_configured_from_its_dictionary(self, tmp_path):
+        first = self.write_dictionary(tmp_path / "BigData.json", 1300, 68)
+        ref = self.write_dictionary(tmp_path / "Ref.json", 1024, 7)
+        shipped = Path(main_module.__file__).parent / "yamcs" / "src" / "main" / "yamcs"
+        # We give the F Prime instance an SDLS key to check that the added instance doesn't get it
+        with patch.object(main_module.subprocess, "run") as run:
+            config_dir, _ = construct_temporary_configuration(shipped, ["fprime-project"], first, 50001, 50000, 50002,
+                                                              [], tmp_path / "sdls.key", 1, [("ref", ref, 50720)])
+        assert run.call_args.args[0] == ["fprime-to-xtce", "-o", str(config_dir / "mdb/ref.xtce.xml"), str(ref)]
+        assert yaml.safe_load((config_dir / "etc/yamcs.yaml").read_text())["instances"] == ["fprime-project", "ref"]
+
+        instance = yaml.safe_load((config_dir / "etc/yamcs.ref.yaml").read_text())
+        assert instance["mdb"][0]["args"]["file"] == str((config_dir / "mdb/ref.xtce.xml").resolve())
+        links = {link["name"]: link for link in instance["dataLinks"]}
+        assert [links["UDP_TM_IN"][key] for key in ("port", "frameLength", "spacecraftId")] == [50720, 1024, 7]
+        assert [links["UDP_TC_OUT"][key] for key in ("port", "maxFrameLength", "spacecraftId")] == [50721, 1024, 7]
+        assert links["UDP_TM_SPLIT_IN"]["port"] == 50722
+        assert "encryption" not in links["UDP_TM_IN"] and "encryption" not in links["UDP_TC_OUT"]
+        services = instance["services"]
+        assert [service["args"]["command"] for service in services if service["class"] == "org.yamcs.ProcessRunner"] == [
+            ["fprime-yamcs-events", "--instance", "ref", "--dictionary", str(ref.resolve())],
+            ["fprime-yamcs-tlmchan", "--instance", "ref", "--dictionary", str(ref.resolve()), "--inject-port", "50722"],
+        ]
+        file_service = next(service["args"] for service in services
+                            if service["class"] == "com.example.myproject.FprimeFilePacketService")
+        assert file_service["bucket"] == "fprimeFilesIn-ref"
+        assert file_service["downlinkMirrorDir"].endswith("/ref")
 
 
 class TestMavenFallback:
